@@ -1,0 +1,43 @@
+---
+name: HA Supervisor Agent
+version: "0.1.0"
+slug: hasup_agent
+description: >-
+  Connects this Home Assistant instance to the HA Supervisor supervision platform:
+  telemetry, inventory, alerts and consent-gated remote maintenance.
+url: https://github.com/TraXXX86/HomeAssistantSupervisor/tree/main/agent
+arch:
+  - aarch64
+  - amd64
+init: false
+startup: services
+boot: auto
+# Access to the Supervisor API (versions, add-ons, backups, updates) and to the Home
+# Assistant API (states, services). "manager" is the lowest role that covers backups,
+# core/OS updates and add-on update/restart.
+hassio_api: true
+hassio_role: manager
+homeassistant_api: true
+host_network: false
+options:
+  server_url: ""
+  enroll_code: ""
+  consent_default: false
+  consent_window_hours: 12
+  consent_entity_id: input_boolean.hasup_maintenance_consent
+  log_events_enabled: true
+  log_min_level: error
+  log_level: info
+  tunnel_enabled: true
+  tunnel_target: http://homeassistant.local.hass.io:8123
+schema:
+  server_url: str
+  enroll_code: str?
+  consent_default: bool
+  consent_window_hours: int(1,168)
+  consent_entity_id: str
+  log_events_enabled: bool
+  log_min_level: list(warning|error|critical)
+  log_level: list(trace|debug|info|notice|warning|error|fatal)
+  tunnel_enabled: bool
+  tunnel_target: str

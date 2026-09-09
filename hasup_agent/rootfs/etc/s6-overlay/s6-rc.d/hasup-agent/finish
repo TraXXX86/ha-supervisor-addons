@@ -1,0 +1,18 @@
+#!/usr/bin/env bashio
+# ==============================================================================
+# Runs when the agent process exits.
+#
+# s6 passes the exit code as $1 (256 means "killed by a signal", which is what the
+# Supervisor does when the add-on is stopped). Any other non-zero code means the agent
+# gave up: stop the container so the Supervisor watchdog can restart the add-on instead
+# of looping silently.
+# ==============================================================================
+declare exit_code="${1}"
+
+if [[ "${exit_code}" -eq 0 ]] || [[ "${exit_code}" -eq 256 ]]; then
+    bashio::log.info "The HA Supervisor agent stopped."
+else
+    bashio::log.warning "The HA Supervisor agent exited with code ${exit_code}."
+fi
+
+exec /run/s6/basedir/bin/halt

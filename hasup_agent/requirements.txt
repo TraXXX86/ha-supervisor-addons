@@ -1,0 +1,4 @@
+# Runtime dependencies of the add-on image. Both ship musllinux wheels for amd64 and
+# aarch64, so no compiler is needed in the image.
+aiohttp==3.14.3
+pydantic==2.13.5

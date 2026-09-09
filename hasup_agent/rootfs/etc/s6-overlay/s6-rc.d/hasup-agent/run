@@ -1,0 +1,15 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start the HA Supervisor agent.
+#
+# The agent reads /data/options.json itself, so nothing has to be exported here; the
+# options file is only inspected to warn about a missing server URL. `exec` keeps the
+# Python process as the service process, so the SIGTERM sent by the Supervisor when the
+# add-on is stopped reaches it directly.
+# ==============================================================================
+if [[ -z "$(bashio::jq /data/options.json '.server_url // empty')" ]]; then
+    bashio::log.warning "No server_url configured yet: set it in the add-on options."
+fi
+
+bashio::log.info "Starting the HA Supervisor agent..."
+exec python3 -m hasup_agent
