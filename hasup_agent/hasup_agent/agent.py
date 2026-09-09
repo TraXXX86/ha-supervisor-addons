@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 import aiohttp
@@ -122,6 +123,7 @@ class Agent:
             target=self.settings.tunnel_target,
             send=self._send,
             enabled=self.settings.tunnel_enabled,
+            consent=self.consent,
         )
         await self.consent.refresh()
 
@@ -411,6 +413,8 @@ class Agent:
         await self._send(EventMessage(payload=payload))
 
     async def _on_consent_change(self, status: ConsentStatus) -> None:
+        if not status.is_active(datetime.now(tz=UTC)) and self.tunnel is not None:
+            await self.tunnel.close_all()
         await self._send_consent_state(status)
 
     async def _send_consent_state(self, status: ConsentStatus) -> None:

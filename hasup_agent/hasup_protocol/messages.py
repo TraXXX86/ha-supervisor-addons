@@ -1,4 +1,4 @@
-"""Pydantic v2 models for every message of the agent <-> server protocol (v1).
+"""Pydantic v2 models for every message of the agent <-> server protocol (v2).
 
 Every WebSocket frame is a JSON object with the common envelope::
 
@@ -38,7 +38,7 @@ def _now() -> datetime:
 class _ProtocolModel(BaseModel):
     """Base for all protocol models: strict about unknown fields."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class BaseMessage(_ProtocolModel):
@@ -55,6 +55,7 @@ class BaseMessage(_ProtocolModel):
 
 class HelloPayload(_ProtocolModel):
     protocol_version: int = PROTOCOL_VERSION
+    capabilities: list[str] = Field(default_factory=list)
     agent_version: str
     ha_core: str | None = None
     ha_os: str | None = None
@@ -67,12 +68,18 @@ class HeartbeatPayload(_ProtocolModel):
     uptime_s: int = Field(ge=0)
 
 
+class CollectionHealth(_ProtocolModel):
+    status: Literal["ok", "unavailable", "unverified"] = "unverified"
+    last_success_at: datetime | None = None
+
+
 class TelemetryPayload(_ProtocolModel):
-    cpu_pct: float = Field(ge=0, le=100)
-    mem_used_mb: float = Field(ge=0)
-    mem_total_mb: float = Field(gt=0)
-    disk_used_gb: float = Field(ge=0)
-    disk_total_gb: float = Field(gt=0)
+    collection: dict[str, CollectionHealth] = Field(default_factory=dict)
+    cpu_pct: float | None = Field(default=None, ge=0, le=100)
+    mem_used_mb: float | None = Field(default=None, ge=0)
+    mem_total_mb: float | None = Field(default=None, gt=0)
+    disk_used_gb: float | None = Field(default=None, ge=0)
+    disk_total_gb: float | None = Field(default=None, gt=0)
     temp_c: float | None = None
 
 
@@ -80,16 +87,17 @@ class AddonInfo(_ProtocolModel):
     slug: str
     name: str
     version: str
-    update_available: bool = False
+    update_available: bool | None = None
 
 
 class UpdateAvailability(_ProtocolModel):
-    core: bool = False
-    os: bool = False
-    supervisor: bool = False
+    core: bool | None = None
+    os: bool | None = None
+    supervisor: bool | None = None
 
 
 class InventoryPayload(_ProtocolModel):
+    collection: dict[str, CollectionHealth] = Field(default_factory=dict)
     addons: list[AddonInfo] = Field(default_factory=list)
     integrations: list[str] = Field(default_factory=list)
     hacs: list[str] = Field(default_factory=list)
@@ -154,6 +162,7 @@ class TunnelOpenPayload(_ProtocolModel):
     stream_id: uuid.UUID
     # Base URL the agent must proxy to, e.g. "http://homeassistant:8123".
     target: str
+    expires_at: datetime | None = None
 
 
 class TunnelClosePayload(_ProtocolModel):

@@ -6,11 +6,9 @@ Assistant instance (``http://homeassistant.local.hass.io:8123`` by default) and 
 bytes both ways as base64 ``tunnel_data`` frames, one increasing ``seq`` per stream and
 per direction.
 
-Back-pressure: reading from the local socket is gated by a bounded outbound window
-(``MAX_INFLIGHT_CHUNKS``), and frames coming from the server are queued per stream with
-a bounded queue; a stream whose queue stays full is closed rather than letting memory
-grow. Frames arriving out of order are buffered up to the 64-message window required by
-``docs/protocol.md`` section 7.8, beyond which the stream is closed with ``error``.
+Reads await relay sends; incoming frames are limited to 32 KiB and the reorder
+window is bounded to 64 frames. The server separately bounds its consumer queue.
+This is not an acknowledgement-based flow control protocol.
 """
 
 from __future__ import annotations
@@ -19,8 +17,10 @@ import asyncio
 import base64
 import contextlib
 import logging
+import ssl
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -33,6 +33,8 @@ from hasup_protocol import (
     TunnelDataPayload,
     TunnelOpenMessage,
 )
+
+from .consent import ConsentManager
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +85,7 @@ class TunnelStream:
                     break
                 if not chunk:
                     break
-                # Back-pressure: never keep more than MAX_INFLIGHT_CHUNKS chunks in
-                # flight towards the relay.
+                # Await the relay send before reading the next local chunk.
                 await self._inflight.acquire()
                 try:
                     await self._send(
@@ -132,6 +133,8 @@ class TunnelStream:
         if self._closed:
             return
         self._closed = True
+        if self._pump_task is not None and self._pump_task is not asyncio.current_task():
+            self._pump_task.cancel()
         with contextlib.suppress(OSError, RuntimeError):
             self._writer.close()
         with contextlib.suppress(OSError, RuntimeError, asyncio.CancelledError, TimeoutError):
@@ -155,7 +158,16 @@ class TunnelStream:
 class TunnelClient:
     """Handles the tunnel messages of one relay session."""
 
-    def __init__(self, target: str, send: SendCallable, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        target: str,
+        send: SendCallable,
+        *,
+        enabled: bool = True,
+        consent: ConsentManager | None = None,
+    ) -> None:
+        self._consent = consent
+        self._deadlines: dict[uuid.UUID, asyncio.Task[None]] = {}
         self._target = target
         self._send = send
         self._enabled = enabled
@@ -175,7 +187,19 @@ class TunnelClient:
 
     async def _open(self, message: TunnelOpenMessage) -> None:
         stream_id = message.payload.stream_id
-        if not self._enabled:
+        if self._consent is not None:
+            await self._consent.refresh()
+        expires = message.payload.expires_at
+        if (
+            not self._enabled
+            or self._consent is None
+            or not self._consent.is_active()
+            or expires is None
+            or expires.tzinfo is None
+            or expires <= datetime.now(tz=UTC)
+            or (expires - datetime.now(tz=UTC)).total_seconds() > 14400
+            or len(self._streams) >= 16
+        ):
             logger.warning("tunnel disabled by configuration, refusing stream %s", stream_id)
             await self._notify_closed(stream_id, TunnelCloseReason.ERROR)
             return
@@ -185,19 +209,33 @@ class TunnelClient:
 
         # The target advertised by the server is informative; the agent connects to the
         # configured local Home Assistant, never to an arbitrary address.
-        host, port = _host_port(self._target)
         try:
+            host, port = _host_port(self._target)
+            tls = ssl.create_default_context() if urlparse(self._target).scheme == "https" else None
             async with asyncio.timeout(CONNECT_TIMEOUT_S):
-                reader, writer = await asyncio.open_connection(host, port)
-        except (OSError, TimeoutError) as exc:
-            logger.error("tunnel %s: cannot reach %s:%s (%s)", stream_id, host, port, exc)
+                reader, writer = await asyncio.open_connection(host, port, ssl=tls)
+        except (OSError, TimeoutError, ValueError) as exc:
+            logger.error("tunnel %s: cannot connect (%s)", stream_id, exc)
             await self._notify_closed(stream_id, TunnelCloseReason.ERROR)
             return
 
+        if not self._consent.is_active() or expires <= datetime.now(tz=UTC):
+            writer.close()
+            await self._notify_closed(stream_id, TunnelCloseReason.ERROR)
+            return
         stream = TunnelStream(stream_id, reader, writer, self._send, self._forget)
         self._streams[stream_id] = stream
         stream.start()
+        self._deadlines[stream_id] = asyncio.create_task(self._expire(stream, expires))
         logger.info("tunnel %s opened to %s:%s", stream_id, host, port)
+
+    async def _expire(self, stream: TunnelStream, expires: datetime) -> None:
+        while stream.stream_id in self._streams:
+            remaining = (expires - datetime.now(tz=UTC)).total_seconds()
+            if remaining <= 0 or self._consent is None or not self._consent.is_active():
+                await stream.close(TunnelCloseReason.TIMEOUT, notify=True)
+                return
+            await asyncio.sleep(min(1.0, remaining))
 
     async def _data(self, message: TunnelDataMessage) -> None:
         stream = self._streams.get(message.payload.stream_id)
@@ -205,12 +243,19 @@ class TunnelClient:
             logger.debug("tunnel data for unknown stream %s", message.payload.stream_id)
             return
         try:
+            if len(message.payload.data) > 4 * ((CHUNK_SIZE + 2) // 3):
+                raise ValueError("oversized frame")
             data = base64.b64decode(message.payload.data, validate=True)
+            if len(data) > CHUNK_SIZE:
+                raise ValueError("oversized frame")
         except (ValueError, TypeError):
             logger.error("tunnel %s: invalid base64 payload", message.payload.stream_id)
             await stream.close(TunnelCloseReason.ERROR, notify=True)
             return
-        await stream.feed(message.payload.seq, data)
+        try:
+            await asyncio.wait_for(stream.feed(message.payload.seq, data), 10.0)
+        except (TimeoutError, OSError):
+            await stream.close(TunnelCloseReason.ERROR, notify=True)
 
     async def _close(self, message: TunnelCloseMessage) -> None:
         stream = self._streams.get(message.payload.stream_id)
@@ -225,6 +270,9 @@ class TunnelClient:
 
     def _forget(self, stream_id: uuid.UUID) -> None:
         self._streams.pop(stream_id, None)
+        task = self._deadlines.pop(stream_id, None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
 
     async def _notify_closed(self, stream_id: uuid.UUID, reason: TunnelCloseReason) -> None:
         await self._send(
@@ -234,6 +282,16 @@ class TunnelClient:
 
 def _host_port(target: str) -> tuple[str, int]:
     parsed = urlparse(target if "://" in target else f"http://{target}")
-    host = parsed.hostname or "homeassistant.local.hass.io"
-    port = parsed.port or (443 if parsed.scheme == "https" else 8123)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("tunnel_target must be an HTTP(S) origin")
+    host = parsed.hostname
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return host, port

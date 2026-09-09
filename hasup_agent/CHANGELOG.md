@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.0
+
+Requires the protocol 2 backend and migration 0004. Upgrade the server first.
+
+- Require local consent and an expiry for every tunnel stream; close streams when
+  consent expires or is withdrawn. Verify TLS for HTTPS targets and bound buffers.
+- Report unavailable CPU/RAM/disk readings as null, with collection health and
+  the last successful collection time. Preserve valid zero readings.
+- Keep last successful inventory sections during API failures and report unknown
+  update status. Attribute HACS updates through HA's entity registry.
+- Fix host CPU accounting (guest times) and missing memory fallback data.
+
 ## 0.1.0
 
 First version of the HA Supervisor agent add-on.

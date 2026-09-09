@@ -10,9 +10,10 @@ while Home Assistant answers are plain JSON, hence the two thin wrappers below.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import TracebackType
-from typing import Any
+from typing import Any, cast
 
 import aiohttp
 
@@ -114,7 +115,7 @@ class SupervisorClient:
                     )
         except TimeoutError as exc:
             raise SupervisorTimeout(f"{method} {path} -> timeout") from exc
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, ValueError) as exc:
             raise SupervisorError(f"{method} {path} -> {exc}") from exc
 
         if isinstance(body, dict) and "result" in body:
@@ -151,8 +152,10 @@ class SupervisorClient:
 
     async def addons(self) -> list[dict[str, Any]]:
         data = _as_dict(await self.get("/addons"))
-        addons = data.get("addons", [])
-        return [item for item in addons if isinstance(item, dict)]
+        addons = data.get("addons")
+        if not isinstance(addons, list) or any(not isinstance(item, dict) for item in addons):
+            raise SupervisorError("invalid addons response")
+        return addons
 
     async def self_info(self) -> dict[str, Any]:
         """Information about this very add-on (``/addons/self/info``)."""
@@ -174,8 +177,32 @@ class SupervisorClient:
     async def ha_states(self) -> list[dict[str, Any]]:
         data = await self.ha_get("states")
         if not isinstance(data, list):
-            return []
+            raise SupervisorError("invalid HA states response")
         return [item for item in data if isinstance(item, dict)]
+
+    async def ha_entity_registry(self) -> list[dict[str, Any]]:
+        try:
+            async with asyncio.timeout(self._timeout_s):
+                async with self._get_session().ws_connect(
+                    f"{self.base_url}/core/websocket", headers=self._headers
+                ) as ws:
+                    hello = await ws.receive_json()
+                    if hello.get("type") != "auth_required":
+                        raise SupervisorError("HA WebSocket did not request authentication")
+                    await ws.send_json({"type": "auth", "access_token": self._token})
+                    if (await ws.receive_json()).get("type") != "auth_ok":
+                        raise SupervisorError("HA WebSocket authentication failed")
+                    await ws.send_json({"id": 1, "type": "config/entity_registry/list"})
+                    result = await ws.receive_json()
+                    if (
+                        result.get("id") != 1
+                        or result.get("success") is not True
+                        or not isinstance(result.get("result"), list)
+                    ):
+                        raise SupervisorError("HA entity registry unavailable")
+                    return cast(list[dict[str, Any]], result["result"])
+        except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as exc:
+            raise SupervisorError("HA entity registry unavailable") from exc
 
     async def ha_state(self, entity_id: str) -> dict[str, Any] | None:
         """State object of one entity, or ``None`` when it does not exist."""

@@ -1,6 +1,6 @@
 """Protocol-wide constants for the agent <-> server WebSocket protocol."""
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # WebSocket path exposed by the relay (and by tools/relay-stub).
 RELAY_PATH = "/relay/v1"

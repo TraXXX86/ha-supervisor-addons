@@ -111,7 +111,10 @@ class ConsentManager:
     # ----------------------------------------------------------- internals
 
     async def _evaluate(self) -> ConsentStatus:
-        entity = await self._read_entity()
+        try:
+            entity = await self._read_entity()
+        except SupervisorError:
+            return ConsentStatus(enabled=False, expires_at=None, source="unavailable")
         if entity is not None:
             return await self._evaluate_entity(entity)
         return self._evaluate_option()
@@ -121,7 +124,7 @@ class ConsentManager:
             return await self._client.ha_state(self._entity_id)
         except SupervisorError as exc:
             logger.warning("consent entity %s unreadable: %s", self._entity_id, exc)
-            return None
+            raise
 
     async def _evaluate_entity(self, entity: dict[str, object]) -> ConsentStatus:
         is_on = str(entity.get("state", "")).lower() == "on"

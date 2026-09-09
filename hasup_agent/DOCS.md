@@ -17,7 +17,7 @@ actions your provider triggers, **only while you have given your consent**.
 | `log_events_enabled` | `true` | Report Home Assistant errors to the supervision server. |
 | `log_min_level` | `error` | Lowest level reported: `warning`, `error` or `critical`. |
 | `log_level` | `info` | Verbosity of the add-on's own logs. |
-| `tunnel_enabled` | `true` | Allow the provider to open a temporary tunnel to the Home Assistant UI (each session is logged). |
+| `tunnel_enabled` | `true` | Allow temporary UI tunnels only while local maintenance consent is active (each session is logged). |
 | `tunnel_target` | `http://homeassistant.local.hass.io:8123` | Local address the tunnel connects to. |
 
 ## Maintenance consent
@@ -50,3 +50,10 @@ provider's request and closed automatically at the end of the session.
 - *"enroll code ... was already used"*: ask for a new code; a code can only be used once.
 - *"relay refused the device token"*: the device was revoked on the server side; ask for
   a new enrollment code.
+
+## Version 0.2.0
+
+Upgrade the central backend to protocol 2 before installing this version. Tunnels
+require a local consent window and close on expiry or consent withdrawal.
+Unavailable measurements are shown as unknown instead of zero. Inventory sections
+retain their last successful values and timestamp during a collection failure.

@@ -17,6 +17,18 @@ Home Assistant à la plateforme de supervision, télémétrie, inventaire et mai
 La configuration et le fonctionnement du consentement sont décrits dans la
 [documentation de l'agent](hasup_agent/DOCS.md).
 
+## Mise à jour vers 0.2.0
+
+Mettre à jour le serveur de supervision **avant l'add-on** : installer ses nouvelles
+dépendances, exécuter `alembic upgrade head` depuis `server/`, puis redémarrer le
+backend et mettre à jour le frontend. L'agent 0.2.0 utilise le protocole 2 et nécessite
+la migration serveur `0004`.
+
+Actualiser ensuite la boutique Home Assistant et installer la mise à jour de l'agent.
+Les tunnels exigent le consentement local et une origine dédiée à chaque session.
+Le [guide de migration](https://github.com/TraXXX86/HomeAssistantSupervisor/blob/main/docs/runbooks/tunnel-monitoring-v2.md)
+détaille la configuration DNS/HTTPS et les essais à effectuer.
+
 Architectures prises en charge : **aarch64** et **amd64**. Home Assistant construit
 l'image à partir du Dockerfile lors de l'installation. Un serveur de supervision réel
 est nécessaire pour l'enrôlement ; le mock Prism du frontend ne permet pas de connecter

@@ -27,7 +27,7 @@ LABEL \
     io.hass.name="HA Supervisor Agent" \
     io.hass.description="Fleet supervision agent for Home Assistant" \
     io.hass.type="addon" \
-    io.hass.version="0.1.0"
+    io.hass.version="0.2.0"
 
 # s6-overlay (provided by the base image) starts the service in
 # /etc/s6-overlay/s6-rc.d/hasup-agent and forwards SIGTERM to it on add-on stop.

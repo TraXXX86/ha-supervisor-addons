@@ -52,7 +52,7 @@ class HostMetricsReader:
             return None
         # user nice system idle iowait irq softirq steal ...
         idle = values[3] + values[4]
-        return CpuSample(total=sum(values), idle=idle)
+        return CpuSample(total=sum(values[:8]), idle=idle)
 
     def cpu_percent(self) -> float | None:
         """CPU usage since the previous call (``None`` on the very first call)."""
@@ -102,7 +102,9 @@ class HostMetricsReader:
             return None
         available_kb = values.get("MemAvailable")
         if available_kb is None:
-            free = values.get("MemFree", 0.0)
+            if not all(key in values for key in ("MemFree", "Buffers", "Cached")):
+                return None
+            free = values["MemFree"]
             buffers = values.get("Buffers", 0.0)
             cached = values.get("Cached", 0.0)
             available_kb = free + buffers + cached
