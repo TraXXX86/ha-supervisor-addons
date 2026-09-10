@@ -17,7 +17,19 @@ Home Assistant à la plateforme de supervision, télémétrie, inventaire et mai
 La configuration et le fonctionnement du consentement sont décrits dans la
 [documentation de l'agent](hasup_agent/DOCS.md).
 
-## Mise à jour vers 0.2.0
+## Mise à jour vers 0.2.1
+
+Mettre à jour et redémarrer d'abord le backend depuis `main` du projet principal,
+avec sa nouvelle version de `shared/hasup_protocol`, puis actualiser la boutique
+Home Assistant et installer **HA Supervisor Agent 0.2.1**. Le backend initial 0.2.0
+ne reconnaît pas le nouveau champ d'inventaire. Aucune migration supplémentaire
+n'est nécessaire si `0004` est déjà appliquée.
+
+Cette version corrige l'affichage des versions HA après une mise à jour : inventaire
+immédiat après une commande réussie, puis vérifications toutes les 15 secondes
+pendant deux minutes. La fiche de la plateforme se rafraîchit toutes les 30 secondes.
+
+## Mise à jour initiale vers 0.2.0
 
 Mettre à jour le serveur de supervision **avant l'add-on** : installer ses nouvelles
 dépendances, exécuter `alembic upgrade head` depuis `server/`, puis redémarrer le

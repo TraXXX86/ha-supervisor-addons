@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from hasup_protocol import (
     AddonInfo,
     HelloPayload,
+    InstalledVersions,
     InventoryPayload,
     TelemetryPayload,
     UpdateAvailability,
@@ -136,18 +137,26 @@ class Collectors:
                 hacs_valid = False
         current.collection["hacs"] = self._health("hacs", hacs_valid)
         flags = current.update_available.model_dump()
+        versions: dict[str, str | None] = {}
         for key, call in (
             ("core", self._client.core_info),
             ("os", self._client.os_info),
             ("supervisor", self._client.supervisor_info),
         ):
             data = await self._safe_dict(call, key)
+            version = data.get("version")
+            versions[key] = (
+                version.strip() or None
+                if isinstance(version, str) and len(version.strip()) <= 50
+                else None
+            )
             value = data.get("update_available")
             valid = isinstance(value, bool)
             if valid:
                 flags[key] = value
             current.collection[key] = self._health(key, valid)
         current.update_available = UpdateAvailability(**flags)
+        current.versions = InstalledVersions(**versions)
         self._inventory = current
         return current.model_copy(deep=True)
 

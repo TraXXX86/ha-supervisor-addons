@@ -1,6 +1,6 @@
 ---
 name: HA Supervisor Agent
-version: "0.2.0"
+version: "0.2.1"
 slug: hasup_agent
 description: >-
   Connects this Home Assistant instance to the HA Supervisor supervision platform:

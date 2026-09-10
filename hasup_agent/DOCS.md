@@ -57,3 +57,15 @@ Upgrade the central backend to protocol 2 before installing this version. Tunnel
 require a local consent window and close on expiry or consent withdrawal.
 Unavailable measurements are shown as unknown instead of zero. Inventory sections
 retain their last successful values and timestamp during a collection failure.
+
+## Version 0.2.1
+
+Upgrade the backend to the matching inventory-versions revision **before the add-on**.
+The new inventory field is rejected by earlier backends, including the initial 0.2.0
+backend. No additional database migration is needed if migration 0004 is applied.
+
+Core, OS and Supervisor versions are now refreshed with each inventory (every five
+minutes by default), including updates performed directly in Home Assistant.
+After a successful remote update or restart, the agent collects immediately and
+retries every 15 seconds for two minutes. The device page polls every 30 seconds.
+An API outage preserves the last known version until a fresh reading is available.

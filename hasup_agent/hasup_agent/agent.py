@@ -22,6 +22,7 @@ from typing import Any
 import aiohttp
 from hasup_protocol import (
     BaseMessage,
+    CommandKind,
     CommandMessage,
     CommandResultMessage,
     CommandResultPayload,
@@ -64,6 +65,8 @@ logger = logging.getLogger(__name__)
 HELLO_ACK_TIMEOUT_S = 15.0
 # Delay between two attempts when the agent has no usable enrollment code.
 NO_CODE_RETRY_S = 60.0
+INVENTORY_REFRESH_INTERVAL_S = 15.0
+INVENTORY_REFRESH_WINDOW_S = 120.0
 
 
 class Agent:
@@ -81,6 +84,8 @@ class Agent:
         self._command_tasks: set[asyncio.Task[None]] = set()
         self._last_inventory: InventoryPayload | None = None
         self._last_inventory_sent_at: float = 0.0
+        self._inventory_refresh = asyncio.Event()
+        self._inventory_refresh_until = 0.0
         self._connected_sessions = 0
 
         self.client: SupervisorClient | None = None
@@ -356,6 +361,17 @@ class Agent:
                 output=f"internal agent error: {exc}",
             )
         await self._send(CommandResultMessage(payload=result))
+        if result.status == CommandResultStatus.SUCCESS and message.payload.kind in {
+            CommandKind.CORE_UPDATE,
+            CommandKind.OS_UPDATE,
+            CommandKind.ADDON_UPDATE,
+            CommandKind.CORE_RESTART,
+            CommandKind.ADDON_RESTART,
+        }:
+            self._inventory_refresh_until = (
+                asyncio.get_running_loop().time() + INVENTORY_REFRESH_WINDOW_S
+            )
+            self._inventory_refresh.set()
 
     # -------------------------------------------------------- periodic tasks
 
@@ -379,7 +395,14 @@ class Agent:
                 return
 
     async def _inventory_loop(self) -> None:
-        while await self._sleep(self.settings.inventory_check_interval_s):
+        while True:
+            delay = self.settings.inventory_check_interval_s
+            if asyncio.get_running_loop().time() < self._inventory_refresh_until:
+                delay = min(delay, INVENTORY_REFRESH_INTERVAL_S)
+            if not await self._sleep(delay, wake_event=self._inventory_refresh):
+                return
+            # Clear before collecting so a command finishing during collection is retained.
+            self._inventory_refresh.clear()
             await self._send_inventory(force=False)
 
     async def _consent_loop(self) -> None:
@@ -442,15 +465,19 @@ class Agent:
                 logger.warning("send failed (%s), session will reconnect", exc)
                 self._session_closed.set()
 
-    async def _sleep(self, delay: float, *, honour_session: bool = True) -> bool:
+    async def _sleep(
+        self, delay: float, *, honour_session: bool = True, wake_event: asyncio.Event | None = None
+    ) -> bool:
         """Interruptible sleep.
 
-        Returns ``True`` when the delay elapsed normally, ``False`` when the agent is
+        Returns ``True`` when the delay elapses or wake_event is set, ``False`` when the agent is
         stopping or (unless ``honour_session`` is false) the relay session ended.
         """
         waiters = [asyncio.create_task(self._stop_event.wait())]
         if honour_session:
             waiters.append(asyncio.create_task(self._session_closed.wait()))
+        if wake_event is not None:
+            waiters.append(asyncio.create_task(wake_event.wait()))
         try:
             done, _ = await asyncio.wait(
                 waiters, timeout=delay, return_when=asyncio.FIRST_COMPLETED
@@ -462,7 +489,7 @@ class Agent:
             return False
         if honour_session and self._session_closed.is_set():
             return False
-        return not done
+        return not done or (wake_event is not None and wake_event.is_set())
 
 
 def _parse_level(name: str) -> EventLevel:

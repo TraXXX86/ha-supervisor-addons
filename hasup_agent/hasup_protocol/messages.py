@@ -96,7 +96,16 @@ class UpdateAvailability(_ProtocolModel):
     supervisor: bool | None = None
 
 
+class InstalledVersions(_ProtocolModel):
+    """Versions observed in this sample; null means unavailable, never uninstalled."""
+
+    core: str | None = Field(default=None, max_length=50)
+    os: str | None = Field(default=None, max_length=50)
+    supervisor: str | None = Field(default=None, max_length=50)
+
+
 class InventoryPayload(_ProtocolModel):
+    versions: InstalledVersions = Field(default_factory=InstalledVersions)
     collection: dict[str, CollectionHealth] = Field(default_factory=dict)
     addons: list[AddonInfo] = Field(default_factory=list)
     integrations: list[str] = Field(default_factory=list)

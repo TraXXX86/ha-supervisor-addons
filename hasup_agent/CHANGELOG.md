@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+Upgrade the backend to the matching inventory-versions revision before the add-on.
+No additional database migration is needed after 0004.
+
+- Report installed Core, OS and Supervisor versions in every inventory so updates
+  are visible without reconnecting the agent.
+- Refresh inventory immediately after successful updates/restarts, then every
+  15 seconds for two minutes to cover temporary API outages during HA startup.
+- Preserve the server's last known versions when a collection is unavailable.
+
 ## 0.2.0
 
 Requires the protocol 2 backend and migration 0004. Upgrade the server first.
