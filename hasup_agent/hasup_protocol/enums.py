@@ -10,6 +10,7 @@ class MessageType(StrEnum):
     HELLO = "hello"
     HEARTBEAT = "heartbeat"
     TELEMETRY = "telemetry"
+    DISK_USAGE = "disk_usage"
     INVENTORY = "inventory"
     EVENT = "event"
     CONSENT_STATE = "consent_state"

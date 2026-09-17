@@ -15,7 +15,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from .constants import (
     HEARTBEAT_INTERVAL_S,
@@ -81,6 +81,69 @@ class TelemetryPayload(_ProtocolModel):
     disk_used_gb: float | None = Field(default=None, ge=0)
     disk_total_gb: float | None = Field(default=None, gt=0)
     temp_c: float | None = None
+
+
+class DiskUsageDirectory(_ProtocolModel):
+    """A measured directory; paths are labels, never commands or file contents."""
+
+    id: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=200)
+    used_bytes: int = Field(ge=0)
+
+
+class DiskUsageItem(DiskUsageDirectory):
+    children: list[DiskUsageDirectory] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_children(self) -> DiskUsageItem:
+        if len({item.id for item in self.children}) != len(self.children):
+            raise ValueError("duplicate disk directory")
+        if sum(item.used_bytes for item in self.children) > self.used_bytes:
+            raise ValueError("directory breakdown exceeds its parent")
+        return self
+
+
+class StorageBackup(_ProtocolModel):
+    slug: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    date: datetime
+    size_bytes: int | None = Field(default=None, ge=0)
+    location: str | None = Field(default=None, max_length=200)
+    type: Literal["full", "partial"]
+
+
+class StorageBackups(_ProtocolModel):
+    collection: CollectionHealth = Field(default_factory=CollectionHealth)
+    items: list[StorageBackup] = Field(default_factory=list, max_length=100)
+    total_count: int = Field(default=0, ge=0)
+
+
+class DiskUsagePayload(_ProtocolModel):
+    """Detailed data-disk usage; unavailable samples keep collection health."""
+
+    collection: CollectionHealth = Field(default_factory=CollectionHealth)
+    total_bytes: int | None = Field(default=None, gt=0)
+    used_bytes: int | None = Field(default=None, ge=0)
+    children: list[DiskUsageItem] = Field(default_factory=list, max_length=100)
+    backups: StorageBackups = Field(default_factory=StorageBackups)
+
+    @model_validator(mode="after")
+    def validate_totals(self) -> DiskUsagePayload:
+        if len({item.id for item in self.children}) != len(self.children):
+            raise ValueError("duplicate disk category")
+        available = self.total_bytes is not None and self.used_bytes is not None
+        if (self.total_bytes is None) != (self.used_bytes is None):
+            raise ValueError("disk total and used bytes must be reported together")
+        if available and self.used_bytes is not None and self.total_bytes is not None:
+            if self.used_bytes > self.total_bytes:
+                raise ValueError("disk used bytes cannot exceed total bytes")
+            if sum(item.used_bytes for item in self.children) > self.used_bytes:
+                raise ValueError("disk breakdown cannot exceed used bytes")
+        if self.children and not available:
+            raise ValueError("disk breakdown requires available totals")
+        if self.collection.status == "ok" and not available:
+            raise ValueError("successful disk collection requires totals")
+        return self
 
 
 class AddonInfo(_ProtocolModel):
@@ -203,6 +266,11 @@ class TelemetryMessage(BaseMessage):
     payload: TelemetryPayload
 
 
+class DiskUsageMessage(BaseMessage):
+    type: Literal[MessageType.DISK_USAGE] = MessageType.DISK_USAGE
+    payload: DiskUsagePayload
+
+
 class InventoryMessage(BaseMessage):
     type: Literal[MessageType.INVENTORY] = MessageType.INVENTORY
     payload: InventoryPayload
@@ -274,6 +342,7 @@ AgentToServerMessage = Annotated[
         HelloMessage,
         HeartbeatMessage,
         TelemetryMessage,
+        DiskUsageMessage,
         InventoryMessage,
         EventMessage,
         ConsentStateMessage,
@@ -301,6 +370,7 @@ AnyMessage = Annotated[
         HelloMessage,
         HeartbeatMessage,
         TelemetryMessage,
+        DiskUsageMessage,
         InventoryMessage,
         EventMessage,
         ConsentStateMessage,

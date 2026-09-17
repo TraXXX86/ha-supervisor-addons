@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.1
+
+Upgrade the matching backend through migration 0006 before the add-on.
+
+- Collect storage every hour, with the twenty largest immediate subdirectories per category.
+- Report the latest 100 Supervisor backups, with dates, sizes and primary locations.
+- Track disk and backup collection health independently; preserve previous successful
+  measurements on the server when either API is unavailable.
+
+## 0.3.0
+
+Requires the backend migration 0005. Upgrade the server before the add-on.
+
+- Collect the Supervisor data-disk breakdown on connection and every six hours.
+- Report collection health when detailed disk usage is unsupported or temporarily
+  unavailable.
+- Advertise the `disk_usage_v1` capability to matching servers.
+
 ## 0.2.1
 
 Upgrade the backend to the matching inventory-versions revision before the add-on.

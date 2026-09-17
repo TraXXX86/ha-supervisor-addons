@@ -150,6 +150,19 @@ class SupervisorClient:
     async def host_info(self) -> dict[str, Any]:
         return _as_dict(await self.get("/host/info"))
 
+    async def disk_usage(self, max_depth: int = 1) -> dict[str, Any]:
+        """Detailed usage of the Supervisor data disk, in bytes."""
+        return _as_dict(
+            await self.get(f"/host/disks/default/usage?max_depth={max_depth}", timeout_s=120)
+        )
+
+    async def storage_backups(self) -> list[dict[str, Any]]:
+        data = _as_dict(await self.get("/backups"))
+        items = data.get("backups")
+        if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
+            raise SupervisorError("invalid backup list")
+        return items
+
     async def addons(self) -> list[dict[str, Any]]:
         data = _as_dict(await self.get("/addons"))
         addons = data.get("addons")

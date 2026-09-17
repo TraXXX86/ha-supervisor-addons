@@ -77,6 +77,8 @@ class AgentSettings(BaseModel):
     # server waits before marking the device offline.
     ws_ping_interval_s: float = Field(default=25.0, gt=0)
     inventory_interval_s: int = Field(default=6 * 3600, ge=60)
+    # Detailed disk usage walks the data disk and must stay much less frequent than telemetry.
+    disk_usage_interval_s: int = Field(default=3600, ge=300)
     # How often the inventory is recomputed to detect a change between two full sends.
     inventory_check_interval_s: float = Field(default=300.0, gt=0)
     # Simulated host metrics source, overridable so tests can point at a fixture tree.
@@ -129,6 +131,7 @@ _FIELD_ENV: dict[str, str] = {
     "heartbeat_interval_s": "HASUP_HEARTBEAT_INTERVAL_S",
     "telemetry_interval_s": "HASUP_TELEMETRY_INTERVAL_S",
     "inventory_interval_s": "HASUP_INVENTORY_INTERVAL_S",
+    "disk_usage_interval_s": "HASUP_DISK_USAGE_INTERVAL_S",
     "inventory_check_interval_s": "HASUP_INVENTORY_CHECK_INTERVAL_S",
     "ws_ping_interval_s": "HASUP_WS_PING_INTERVAL_S",
     "log_min_level": "HASUP_LOG_MIN_LEVEL",

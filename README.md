@@ -17,6 +17,14 @@ Home Assistant à la plateforme de supervision, télémétrie, inventaire et mai
 La configuration et le fonctionnement du consentement sont décrits dans la
 [documentation de l'agent](hasup_agent/DOCS.md).
 
+## Mise à jour vers 0.3.1
+
+Déployer d'abord le serveur et l'interface compatibles avec Stockage, avec les
+migrations 0005 et 0006, puis installer **HA Supervisor Agent 0.3.1**.
+La nouvelle collecte horaire fournit la répartition du disque, les principaux
+sous-dossiers et l'inventaire des sauvegardes. Les anciennes versions du serveur
+refusent ces nouveaux champs. Aucun nouvel enrôlement n'est nécessaire.
+
 ## Mise à jour vers 0.2.1
 
 Mettre à jour et redémarrer d'abord le backend depuis `main` du projet principal,

@@ -29,6 +29,7 @@ from hasup_protocol import (
     CommandResultStatus,
     ConsentStateMessage,
     ConsentStatePayload,
+    DiskUsageMessage,
     EventLevel,
     EventMessage,
     EventPayload,
@@ -86,6 +87,7 @@ class Agent:
         self._last_inventory_sent_at: float = 0.0
         self._inventory_refresh = asyncio.Event()
         self._inventory_refresh_until = 0.0
+        self._last_disk_usage_sent_at: float | None = None
         self._connected_sessions = 0
 
         self.client: SupervisorClient | None = None
@@ -271,6 +273,7 @@ class Agent:
             group.create_task(self._close_on_stop(ws))
             group.create_task(self._heartbeat_loop())
             group.create_task(self._telemetry_loop())
+            group.create_task(self._disk_usage_loop())
             group.create_task(self._inventory_loop())
             group.create_task(self._consent_loop())
             if self.settings.log_events_enabled:
@@ -404,6 +407,23 @@ class Agent:
             # Clear before collecting so a command finishing during collection is retained.
             self._inventory_refresh.clear()
             await self._send_inventory(force=False)
+
+    async def _disk_usage_loop(self) -> None:
+        assert self.collectors is not None
+        while True:
+            now = asyncio.get_running_loop().time()
+            if self._last_disk_usage_sent_at is None:
+                delay = 0.0
+            else:
+                elapsed = now - self._last_disk_usage_sent_at
+                delay = max(0.0, self.settings.disk_usage_interval_s - elapsed)
+            if delay and not await self._sleep(delay):
+                return
+            payload = await self.collectors.disk_usage_payload()
+            await self._send(DiskUsageMessage(payload=payload))
+            if self._session_closed.is_set():
+                return
+            self._last_disk_usage_sent_at = asyncio.get_running_loop().time()
 
     async def _consent_loop(self) -> None:
         assert self.consent is not None

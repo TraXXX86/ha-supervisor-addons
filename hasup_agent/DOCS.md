@@ -38,9 +38,11 @@ window opens when the option goes from `false` to `true` and closes automaticall
 
 ## What the add-on sends
 
-Only operational data: versions, resource usage, add-on and integration names,
-automation count, and error messages coming from the Home Assistant log. No entity
-state, no history, no personal data. The tunnel, when used, is opened at your
+Operational data includes versions, resource usage, disk categories and immediate
+subdirectory names and sizes, backup names, dates, sizes and primary locations,
+add-on and integration names, automation count, and Home Assistant error messages.
+Directory and backup names can contain information chosen by the user. File contents,
+backup contents and entity state history are not collected. The tunnel is opened at your
 provider's request and closed automatically at the end of the session.
 
 ## Troubleshooting
@@ -69,3 +71,25 @@ minutes by default), including updates performed directly in Home Assistant.
 After a successful remote update or restart, the agent collects immediately and
 retries every 15 seconds for two minutes. The device page polls every 30 seconds.
 An API outage preserves the last known version until a fresh reading is available.
+
+## Version 0.3.0
+
+Upgrade the central backend through migration 0005 before installing this version.
+The agent now collects the data-disk breakdown at connection time and every six hours.
+Only the Supervisor's top-level categories are sent; individual file names are never
+collected. Older Supervisor versions are reported as unavailable without affecting the
+usual CPU, memory and disk-total telemetry.
+
+## Version 0.3.1
+
+Upgrade the matching server through migration 0006 before installing the add-on:
+older strict parsers reject the new storage fields. Collection runs on first
+connection and once per hour, with a 120-second disk request timeout. Reconnecting
+does not trigger another scan before the interval expires.
+
+The Storage tab shows categories, up to twenty largest immediate subdirectories per
+category, and the latest 100 backups exposed by Supervisor. Cloud-only backups may
+not be listed by that API. Backup metadata is collected independently of disk usage;
+the server keeps the last successful list during an outage. No filesystem mount,
+SSH access or deletion permission is added. Individual file sizes, including SQLite,
+are not available from this directory API.

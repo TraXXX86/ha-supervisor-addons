@@ -11,13 +11,20 @@ from urllib.parse import urlsplit
 
 from hasup_protocol import (
     AddonInfo,
+    DiskUsageItem,
+    DiskUsagePayload,
     HelloPayload,
     InstalledVersions,
     InventoryPayload,
     TelemetryPayload,
     UpdateAvailability,
 )
-from hasup_protocol.messages import CollectionHealth
+from hasup_protocol.messages import (
+    CollectionHealth,
+    DiskUsageDirectory,
+    StorageBackup,
+    StorageBackups,
+)
 
 from . import AGENT_VERSION
 from .metrics import HostMetricsReader
@@ -46,7 +53,7 @@ class Collectors:
         supervisor = await self._safe_dict(self._client.supervisor_info, "supervisor/info")
         return HelloPayload(
             agent_version=AGENT_VERSION,
-            capabilities=["tunnel_v2"],
+            capabilities=["tunnel_v2", "disk_usage_v1"],
             ha_core=_str_or_none(core.get("version")),
             ha_os=_str_or_none(os_info.get("version")),
             ha_supervisor=_str_or_none(supervisor.get("version")),
@@ -89,6 +96,119 @@ class Collectors:
             free = _float_or_none(host.get("disk_free"))
             used = total - free if free is not None else None
         return _capacity_pair(used, total)
+
+    async def disk_usage_payload(self) -> DiskUsagePayload:
+        """Keep the disk and backup collections independent when either API fails."""
+        backups = await self._storage_backups()
+        try:
+            raw = await self._client.disk_usage(max_depth=2)
+            total = _non_negative_int(raw.get("total_bytes"))
+            used = _non_negative_int(raw.get("used_bytes"))
+            raw_children = raw.get("children", [])
+            if total is None or total <= 0 or used is None or used > total:
+                raise ValueError("invalid disk totals")
+            if not isinstance(raw_children, list):
+                raise ValueError("invalid disk breakdown")
+            children: list[DiskUsageItem] = []
+            for raw_item in raw_children[:100]:
+                if not isinstance(raw_item, dict):
+                    raise ValueError("invalid disk category")
+                item_id = _bounded_text(raw_item.get("id"), 100)
+                label = _bounded_text(raw_item.get("label"), 200)
+                item_used = _non_negative_int(raw_item.get("used_bytes"))
+                if item_id is None or label is None or item_used is None:
+                    raise ValueError("invalid disk category")
+                directories: list[DiskUsageDirectory] = []
+                raw_directories = raw_item.get("children", [])
+                if isinstance(raw_directories, list):
+                    seen: set[str] = set()
+                    for directory in raw_directories:
+                        if not isinstance(directory, dict):
+                            continue
+                        directory_id = _bounded_text(directory.get("id"), 100)
+                        directory_label = _bounded_text(directory.get("label"), 200)
+                        directory_used = _non_negative_int(directory.get("used_bytes"))
+                        if (
+                            directory_id is None
+                            or directory_label is None
+                            or directory_used is None
+                            or directory_id in seen
+                        ):
+                            continue
+                        seen.add(directory_id)
+                        directories.append(
+                            DiskUsageDirectory(
+                                id=directory_id, label=directory_label, used_bytes=directory_used
+                            )
+                        )
+                # A changing filesystem can yield inconsistent child sizes. Keep totals.
+                if sum(item.used_bytes for item in directories) > item_used:
+                    directories = []
+                directories.sort(key=lambda item: item.used_bytes, reverse=True)
+                children.append(
+                    DiskUsageItem(
+                        id=item_id, label=label, used_bytes=item_used, children=directories[:20]
+                    )
+                )
+            payload = DiskUsagePayload(
+                total_bytes=total,
+                used_bytes=used,
+                children=children,
+                backups=backups,
+            )
+            payload.collection = self._health("disk_usage", True)
+            return payload
+        except (SupervisorError, ValueError, TypeError) as exc:
+            logger.warning("detailed disk usage unavailable: %s", exc)
+            return DiskUsagePayload(collection=self._health("disk_usage", False), backups=backups)
+
+    async def _storage_backups(self) -> StorageBackups:
+        try:
+            raw = await self._client.storage_backups()
+            items: list[StorageBackup] = []
+            seen: set[str] = set()
+            for item in raw:
+                slug = _bounded_text(item.get("slug"), 100)
+                name = _bounded_text(item.get("name"), 200)
+                if slug is None or name is None or slug in seen:
+                    raise ValueError("invalid or duplicate backup")
+                seen.add(slug)
+                # Supervisor reports MiB, rounded to two decimals; never sum these
+                # estimates into the measured disk total (backups may be remote).
+                size = _float_or_none(item.get("size"))
+                size_bytes = _non_negative_int(item.get("size_bytes"))
+                if size_bytes is None and size is not None and size >= 0:
+                    size_bytes = round(size * 1024**2)
+                if "location" not in item:
+                    raise ValueError("backup location missing")
+                location = _bounded_text(item.get("location"), 200)
+                if item["location"] is not None and location is None:
+                    raise ValueError("invalid backup location")
+                date = datetime.fromisoformat(str(item.get("date")))
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=UTC)
+                backup_type = item.get("type")
+                if backup_type not in ("full", "partial"):
+                    raise ValueError("invalid backup type")
+                items.append(
+                    StorageBackup(
+                        slug=slug,
+                        name=name,
+                        date=date,
+                        size_bytes=size_bytes,
+                        location=location,
+                        type="full" if backup_type == "full" else "partial",
+                    )
+                )
+            items.sort(key=lambda item: item.date, reverse=True)
+            return StorageBackups(
+                collection=self._health("storage_backups", True),
+                items=items[:100],
+                total_count=len(items),
+            )
+        except (SupervisorError, ValueError, TypeError) as exc:
+            logger.warning("storage backup list unavailable: %s", exc)
+            return StorageBackups(collection=self._health("storage_backups", False))
 
     def uptime_s(self) -> int:
         return self._metrics.uptime_s()
@@ -249,6 +369,23 @@ def _float_or_none(value: Any) -> float | None:
         return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
+
+
+def _non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if number >= 0 else None
+
+
+def _bounded_text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:limit] if text else None
 
 
 def _capacity_pair(used: Any, total: Any) -> tuple[float | None, float | None]:
