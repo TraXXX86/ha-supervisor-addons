@@ -163,6 +163,10 @@ class SupervisorClient:
             raise SupervisorError("invalid backup list")
         return items
 
+    async def storage_backup_info(self, slug: str) -> dict[str, Any]:
+        """Detailed metadata for one archive; callers treat unsupported API as optional."""
+        return _as_dict(await self.get(f"/backups/{slug}/info", timeout_s=10))
+
     async def addons(self) -> list[dict[str, Any]]:
         data = _as_dict(await self.get("/addons"))
         addons = data.get("addons")

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+Upgrade the matching backend through migration 0007 before the add-on.
+
+- Report inventory completeness and known copies, with per-copy size/protection.
+- Fetch optional content/version/database metadata for the 20 newest archives
+  (five concurrent reads, ten-second timeout each); retain up to 100 archives.
+- Keep failed optional details separate from inventory collection health.
+- Support the dedicated backup inventory, observed history and protection alerts.
+- Supervisor visibility is not proof of complete cloud coverage. No archive
+  transfer, deletion, restore or new scheduling is added.
+
 ## 0.3.1
 
 Upgrade the matching backend through migration 0006 before the add-on.

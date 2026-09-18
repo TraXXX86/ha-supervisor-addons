@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from collections.abc import Awaitable, Callable
@@ -20,6 +21,7 @@ from hasup_protocol import (
     UpdateAvailability,
 )
 from hasup_protocol.messages import (
+    BackupLocation,
     CollectionHealth,
     DiskUsageDirectory,
     StorageBackup,
@@ -165,50 +167,159 @@ class Collectors:
     async def _storage_backups(self) -> StorageBackups:
         try:
             raw = await self._client.storage_backups()
-            items: list[StorageBackup] = []
-            seen: set[str] = set()
+            details = await self._storage_backup_details(raw)
+            by_slug: dict[str, StorageBackup] = {}
             for item in raw:
                 slug = _bounded_text(item.get("slug"), 100)
                 name = _bounded_text(item.get("name"), 200)
-                if slug is None or name is None or slug in seen:
-                    raise ValueError("invalid or duplicate backup")
-                seen.add(slug)
+                if slug is None or name is None:
+                    raise ValueError("invalid backup")
                 # Supervisor reports MiB, rounded to two decimals; never sum these
                 # estimates into the measured disk total (backups may be remote).
                 size = _float_or_none(item.get("size"))
                 size_bytes = _non_negative_int(item.get("size_bytes"))
                 if size_bytes is None and size is not None and size >= 0:
                     size_bytes = round(size * 1024**2)
-                if "location" not in item:
+                raw_locations = item.get("locations")
+                if raw_locations is None:
+                    if "location" not in item:
+                        raise ValueError("backup location missing")
+                    raw_locations = [item.get("location")]
+                if not isinstance(raw_locations, list):
+                    raise ValueError("invalid backup locations")
+                locations: list[str | None] = []
+                for raw_location in raw_locations[:20]:
+                    location_id = _parse_location(raw_location)
+                    if location_id not in locations:
+                        locations.append(location_id)
+                location = (
+                    _parse_location(item["location"])
+                    if "location" in item
+                    else (locations[0] if locations else None)
+                )
+                if "location" not in item and not locations:
                     raise ValueError("backup location missing")
-                location = _bounded_text(item.get("location"), 200)
-                if item["location"] is not None and location is None:
-                    raise ValueError("invalid backup location")
+                if location not in locations:
+                    locations.insert(0, location)
+                raw_attributes = item.get("location_attributes")
+                attributes = raw_attributes if isinstance(raw_attributes, dict) else {}
+                copies: list[BackupLocation] = []
+                for location_id in locations:
+                    attribute_key = ".local" if location_id is None else location_id
+                    attr = attributes.get(attribute_key, {})
+                    if not isinstance(attr, dict):
+                        attr = {}
+                    copy_size = _non_negative_int(attr.get("size_bytes"))
+                    copy_protected = attr.get("protected")
+                    if location_id == location:
+                        if copy_size is None:
+                            copy_size = size_bytes
+                        if not isinstance(copy_protected, bool):
+                            copy_protected = item.get("protected")
+                    copies.append(
+                        BackupLocation(
+                            id=location_id,
+                            kind="local" if location_id is None else "remote",
+                            size_bytes=copy_size,
+                            protected=copy_protected if isinstance(copy_protected, bool) else None,
+                        )
+                    )
                 date = datetime.fromisoformat(str(item.get("date")))
                 if date.tzinfo is None:
                     date = date.replace(tzinfo=UTC)
                 backup_type = item.get("type")
                 if backup_type not in ("full", "partial"):
                     raise ValueError("invalid backup type")
-                items.append(
-                    StorageBackup(
-                        slug=slug,
-                        name=name,
-                        date=date,
-                        size_bytes=size_bytes,
-                        location=location,
-                        type="full" if backup_type == "full" else "partial",
-                    )
+                existing = by_slug.get(slug)
+                if existing is not None:
+                    if (
+                        existing.name != name
+                        or existing.date != date
+                        or existing.type != backup_type
+                    ):
+                        raise ValueError("conflicting duplicate backup")
+                    for copy in copies:
+                        if copy.id not in existing.locations:
+                            existing.locations.append(copy.id)
+                            existing.copies.append(copy)
+                    continue
+
+                detail = details.get(slug, {})
+                content_source = detail.get("content", item.get("content"))
+                content = content_source if isinstance(content_source, dict) else {}
+                addons = _text_list(
+                    detail.get("addons", content.get("addons", item.get("addons"))), 200
                 )
+                folders = _text_list(
+                    detail.get("folders", content.get("folders", item.get("folders"))), 100
+                )
+                ha_included = content.get("homeassistant")
+                exclude_database = detail.get("homeassistant_exclude_database")
+                database_included = (
+                    bool(ha_included and not exclude_database)
+                    if isinstance(ha_included, bool) and isinstance(exclude_database, bool)
+                    else None
+                )
+                protected = detail.get("protected", item.get("protected"))
+                if not isinstance(protected, bool):
+                    protected = None
+                version = _bounded_text(
+                    detail.get("homeassistant")
+                    or detail.get("homeassistant_version")
+                    or item.get("homeassistant_version"),
+                    50,
+                )
+                by_slug[slug] = StorageBackup(
+                    slug=slug,
+                    name=name,
+                    date=date,
+                    size_bytes=size_bytes,
+                    location=location,
+                    locations=locations,
+                    copies=copies,
+                    type="full" if backup_type == "full" else "partial",
+                    protected=protected,
+                    home_assistant_version=version,
+                    database_included=database_included,
+                    addons=addons,
+                    folders=folders,
+                )
+            items = list(by_slug.values())
             items.sort(key=lambda item: item.date, reverse=True)
             return StorageBackups(
                 collection=self._health("storage_backups", True),
                 items=items[:100],
                 total_count=len(items),
+                complete=len(items) <= 100,
+                coverage="supervisor_visible",
             )
         except (SupervisorError, ValueError, TypeError) as exc:
             logger.warning("storage backup list unavailable: %s", exc)
             return StorageBackups(collection=self._health("storage_backups", False))
+
+    async def _storage_backup_details(self, raw: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Fetch bounded optional details without making list health depend on them."""
+        slugs: list[str] = []
+
+        def sort_date(item: dict[str, Any]) -> str:
+            return str(item.get("date", ""))
+
+        for item in sorted(raw, key=sort_date, reverse=True)[:20]:
+            slug = _bounded_text(item.get("slug"), 100)
+            if slug is not None and slug not in slugs:
+                slugs.append(slug)
+
+        semaphore = asyncio.Semaphore(5)
+
+        async def load(slug: str) -> tuple[str, dict[str, Any]]:
+            async with semaphore:
+                try:
+                    return slug, await self._client.storage_backup_info(slug)
+                except SupervisorError as exc:
+                    logger.debug("backup detail unavailable for %s: %s", slug, exc)
+                    return slug, {}
+
+        return dict(await asyncio.gather(*(load(slug) for slug in slugs)))
 
     def uptime_s(self) -> int:
         return self._metrics.uptime_s()
@@ -386,6 +497,30 @@ def _bounded_text(value: Any, limit: int) -> str | None:
         return None
     text = value.strip()
     return text[:limit] if text else None
+
+
+def _text_list(value: Any, limit: int) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        return None
+    result: list[str] = []
+    for item in value[:limit]:
+        # Backup content can be returned as slugs or ``{"slug": ...}``.
+        raw = item.get("slug") if isinstance(item, dict) else item
+        text = _bounded_text(raw, 100)
+        if text is not None and text not in result:
+            result.append(text)
+    return result
+
+
+def _parse_location(value: Any) -> str | None:
+    if value in (None, ".local"):
+        return None
+    result = _bounded_text(value, 200)
+    if result is None:
+        raise ValueError("invalid backup location")
+    return result
 
 
 def _capacity_pair(used: Any, total: Any) -> tuple[float | None, float | None]:

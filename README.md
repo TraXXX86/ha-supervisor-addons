@@ -19,6 +19,11 @@ La configuration et le fonctionnement du consentement sont décrits dans la
 
 ## Mise à jour vers 0.3.1
 
+Pour **0.4.0**, déployer d'abord serveur/interface avec la migration **0007**.
+Cette version ajoute l'inventaire enrichi, l'historique observé et les règles de
+protection de l'onglet Sauvegardes. Aucune suppression/restauration n'est ajoutée.
+L'inventaire Supervisor ne garantit pas la visibilité sur tous les clouds.
+
 Déployer d'abord le serveur et l'interface compatibles avec Stockage, avec les
 migrations 0005 et 0006, puis installer **HA Supervisor Agent 0.3.1**.
 La nouvelle collecte horaire fournit la répartition du disque, les principaux

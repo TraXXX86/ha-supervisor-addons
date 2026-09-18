@@ -1,5 +1,11 @@
 # HA Supervisor Agent
 
+Version 0.4.0 requires the matching server with migration 0007; upgrade the server
+first. Backup observations now include completeness, known copies and optional
+content details (20 newest archives, inventory capped at 100). Unsupported details
+remain unknown. Supervisor visibility does not guarantee all cloud copies are known.
+No new creation, deletion or restoration action is introduced.
+
 This add-on connects your Home Assistant instance to the HA Supervisor supervision
 platform. It reports the health of the box (versions, CPU, memory, disk, temperature,
 add-ons, integrations, automations, available updates) and executes the maintenance

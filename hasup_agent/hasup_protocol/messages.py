@@ -103,19 +103,52 @@ class DiskUsageItem(DiskUsageDirectory):
         return self
 
 
+class BackupLocation(_ProtocolModel):
+    id: str | None = Field(default=None, max_length=200)
+    kind: Literal["local", "remote"]
+    size_bytes: int | None = Field(default=None, ge=0)
+    protected: bool | None = None
+
+
 class StorageBackup(_ProtocolModel):
     slug: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     date: datetime
     size_bytes: int | None = Field(default=None, ge=0)
     location: str | None = Field(default=None, max_length=200)
+    # One logical archive can be exposed from several Supervisor locations.
+    # ``location`` remains the primary location for protocol v2 consumers.
+    locations: list[str | None] = Field(default_factory=list, max_length=20)
+    copies: list[BackupLocation] = Field(default_factory=list, max_length=20)
     type: Literal["full", "partial"]
+    protected: bool | None = None
+    home_assistant_version: str | None = Field(default=None, max_length=50)
+    database_included: bool | None = None
+    addons: list[str] | None = Field(default=None, max_length=200)
+    folders: list[str] | None = Field(default=None, max_length=100)
 
 
 class StorageBackups(_ProtocolModel):
     collection: CollectionHealth = Field(default_factory=CollectionHealth)
     items: list[StorageBackup] = Field(default_factory=list, max_length=100)
     total_count: int = Field(default=0, ge=0)
+    # Completeness is independent from transport health.  An ``ok`` collection
+    # may still be truncated and must then never drive disappearance events.
+    complete: bool = False
+    # The Supervisor API covers local and configured Supervisor locations; it
+    # cannot attest to copies made by unrelated cloud integrations.
+    coverage: Literal["unknown", "supervisor_visible"] = "unknown"
+    # The Supervisor intentionally omits some cloud-only archives.  This flag
+    # remains false unless a future source can attest to all remote copies.
+    remote_coverage_complete: bool = False
+
+    @model_validator(mode="after")
+    def validate_inventory(self) -> StorageBackups:
+        if len({item.slug for item in self.items}) != len(self.items):
+            raise ValueError("duplicate backup archive")
+        if self.complete and self.total_count != len(self.items):
+            raise ValueError("complete backup inventory must contain every archive")
+        return self
 
 
 class DiskUsagePayload(_ProtocolModel):
