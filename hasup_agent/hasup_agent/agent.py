@@ -24,6 +24,8 @@ from hasup_protocol import (
     BaseMessage,
     CommandKind,
     CommandMessage,
+    CommandProgressMessage,
+    CommandProgressPayload,
     CommandResultMessage,
     CommandResultPayload,
     CommandResultStatus,
@@ -352,8 +354,12 @@ class Agent:
 
     async def _run_command(self, message: CommandMessage) -> None:
         assert self.executor is not None
+
+        async def report(progress: CommandProgressPayload) -> None:
+            await self._send(CommandProgressMessage(payload=progress))
+
         try:
-            result = await self.executor.execute(message.payload)
+            result = await self.executor.execute(message.payload, report=report)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # defensive: a command must always answer
@@ -364,13 +370,19 @@ class Agent:
                 output=f"internal agent error: {exc}",
             )
         await self._send(CommandResultMessage(payload=result))
-        if result.status == CommandResultStatus.SUCCESS and message.payload.kind in {
-            CommandKind.CORE_UPDATE,
-            CommandKind.OS_UPDATE,
-            CommandKind.ADDON_UPDATE,
-            CommandKind.CORE_RESTART,
-            CommandKind.ADDON_RESTART,
-        }:
+        if message.payload.kind in {CommandKind.HACS_UPDATE, CommandKind.HACS_RESTART} or (
+            result.status == CommandResultStatus.SUCCESS
+            and message.payload.kind
+            in {
+                CommandKind.CORE_UPDATE,
+                CommandKind.OS_UPDATE,
+                CommandKind.ADDON_UPDATE,
+                CommandKind.CORE_RESTART,
+                CommandKind.ADDON_RESTART,
+                CommandKind.HACS_UPDATE,
+                CommandKind.HACS_RESTART,
+            }
+        ):
             self._inventory_refresh_until = (
                 asyncio.get_running_loop().time() + INVENTORY_REFRESH_WINDOW_S
             )

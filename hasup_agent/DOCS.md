@@ -1,10 +1,27 @@
 # HA Supervisor Agent
 
-Version 0.4.0 requires the matching server with migration 0007; upgrade the server
-first. Backup observations now include completeness, known copies and optional
-content details (20 newest archives, inventory capped at 100). Unsupported details
-remain unknown. Supervisor visibility does not guarantee all cloud copies are known.
-No new creation, deletion or restoration action is introduced.
+Version 0.5.0 requires the matching server with migration 0010; upgrade the server
+first. It adds HACS inventory and consent-gated updates, with a mandatory full
+backup before installation. Home Assistant restarts are separate explicit actions.
+
+## HACS maintenance
+
+The HACS tab in the supervision application lists downloaded modules and proposed
+versions, including unavailable or disabled update entities. An operator can install
+only the version currently offered by HACS. A full Supervisor backup must finish
+and its metadata must be readable before installation starts. Consent and versions
+are checked again after the backup. Only one maintenance action runs at a time.
+
+The application records backup, install and verification phases, the archive slug,
+and any error. Downloaded integrations may still require a restart. The separate
+restart action checks Home Assistant's running state, HACS's downloaded version and
+restart marker, and new integration errors. Dashboard cards may require a browser
+refresh; other repository types may need their own reload. These checks do not prove
+that every automation or module works correctly. No automatic restore is performed.
+
+If a command times out, check the real state before retrying. Never assume that a
+lost connection cancelled an installation. Keep backups off the Home Assistant
+machine as well: the local pre-update archive does not protect against disk failure.
 
 This add-on connects your Home Assistant instance to the HA Supervisor supervision
 platform. It reports the health of the box (versions, CPU, memory, disk, temperature,

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0
+
+Upgrade the matching server through migration 0010 **before** upgrading the add-on.
+
+- Advertise `hacs_update_v1` and report HACS repositories, offered/downloaded
+  versions, availability, release links and restart markers.
+- Install only a currently offered version of an entity attributed to HACS.
+  Create a full Supervisor backup and confirm its metadata before installation;
+  recheck consent and versions afterwards. Failures stop the operation.
+- Report backup, installation and verification phases in command history.
+- Restart Home Assistant only through an explicit separate action; verify the
+  downloaded version, cleared restart marker, running state and new integration errors.
+- Reject overlapping maintenance commands; never automatically retry an install
+  or restart whose result is uncertain. Refresh inventory after every HACS outcome.
+- Existing health/repairs collection is included. Download verification is not
+  proof that every dashboard card or integration works; no automatic restore is provided.
+
 ## 0.4.0
 
 Upgrade the matching backend through migration 0007 before the add-on.

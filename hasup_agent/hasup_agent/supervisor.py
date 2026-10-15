@@ -221,6 +221,46 @@ class SupervisorClient:
         except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as exc:
             raise SupervisorError("HA entity registry unavailable") from exc
 
+    async def ha_ws_command(self, command: str) -> Any:
+        """Execute one authenticated, read-only Home Assistant WebSocket command."""
+        try:
+            async with asyncio.timeout(self._timeout_s):
+                async with self._get_session().ws_connect(
+                    f"{self.base_url}/core/websocket", headers=self._headers
+                ) as ws:
+                    hello = await ws.receive_json()
+                    if hello.get("type") != "auth_required":
+                        raise SupervisorError("HA WebSocket did not request authentication")
+                    await ws.send_json({"type": "auth", "access_token": self._token})
+                    if (await ws.receive_json()).get("type") != "auth_ok":
+                        raise SupervisorError("HA WebSocket authentication failed")
+                    await ws.send_json({"id": 1, "type": command})
+                    result = await ws.receive_json()
+                    if result.get("id") != 1 or result.get("success") is not True:
+                        raise SupervisorError(f"HA WebSocket command unavailable: {command}")
+                    return result.get("result")
+        except (TimeoutError, aiohttp.ClientError, ValueError, TypeError) as exc:
+            raise SupervisorError(f"HA WebSocket command unavailable: {command}") from exc
+
+    async def ha_repairs(self) -> list[dict[str, Any]]:
+        result = await self.ha_ws_command("repairs/list_issues")
+        issues = result.get("issues") if isinstance(result, dict) else None
+        if not isinstance(issues, list):
+            raise SupervisorError("invalid HA repairs response")
+        return [item for item in issues if isinstance(item, dict)]
+
+    async def ha_config_entries(self) -> list[dict[str, Any]]:
+        result = await self.ha_ws_command("config_entries/get")
+        if not isinstance(result, list):
+            raise SupervisorError("invalid HA config entries response")
+        return [item for item in result if isinstance(item, dict)]
+
+    async def ha_device_registry(self) -> list[dict[str, Any]]:
+        result = await self.ha_ws_command("config/device_registry/list")
+        if not isinstance(result, list):
+            raise SupervisorError("invalid HA device registry response")
+        return [item for item in result if isinstance(item, dict)]
+
     async def ha_state(self, entity_id: str) -> dict[str, Any] | None:
         """State object of one entity, or ``None`` when it does not exist."""
         try:
@@ -231,9 +271,16 @@ class SupervisorClient:
             raise
 
     async def ha_call_service(
-        self, domain: str, service: str, data: dict[str, Any] | None = None
+        self,
+        domain: str,
+        service: str,
+        data: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
     ) -> None:
-        await self.post(f"/core/api/services/{domain}/{service}", json_body=data or {})
+        await self.post(
+            f"/core/api/services/{domain}/{service}", json_body=data or {}, timeout_s=timeout_s
+        )
 
     # ------------------------------------------------------------ commands
 

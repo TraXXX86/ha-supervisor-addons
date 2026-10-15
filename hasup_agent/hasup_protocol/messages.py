@@ -184,6 +184,40 @@ class AddonInfo(_ProtocolModel):
     name: str
     version: str
     update_available: bool | None = None
+    state: str | None = Field(default=None, max_length=50)
+
+
+class ComponentHealth(_ProtocolModel):
+    status: Literal["ok", "degraded", "down", "unavailable", "unknown"] = "unknown"
+    version: str | None = Field(default=None, max_length=50)
+    response_ms: float | None = Field(default=None, ge=0)
+    message: str | None = Field(default=None, max_length=500)
+
+
+class IntegrationHealth(_ProtocolModel):
+    domain: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    state: str = Field(max_length=50)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class RepairIssue(_ProtocolModel):
+    issue_id: str = Field(min_length=1, max_length=200)
+    domain: str = Field(min_length=1, max_length=100)
+    severity: str = Field(default="warning", max_length=30)
+    translation_key: str | None = Field(default=None, max_length=200)
+    breaks_in_ha_version: str | None = Field(default=None, max_length=50)
+    fixable: bool = False
+    ignored: bool = False
+
+
+class FleetHealthPayload(_ProtocolModel):
+    collection: dict[str, CollectionHealth] = Field(default_factory=dict)
+    core: ComponentHealth = Field(default_factory=ComponentHealth)
+    supervisor: ComponentHealth = Field(default_factory=ComponentHealth)
+    addons: list[AddonInfo] = Field(default_factory=list, max_length=200)
+    integrations: list[IntegrationHealth] = Field(default_factory=list, max_length=1000)
+    repairs: list[RepairIssue] = Field(default_factory=list, max_length=500)
 
 
 class UpdateAvailability(_ProtocolModel):
@@ -200,14 +234,31 @@ class InstalledVersions(_ProtocolModel):
     supervisor: str | None = Field(default=None, max_length=50)
 
 
+class HacsRepository(_ProtocolModel):
+    entity_id: str = Field(pattern=r"^update\.[a-z0-9_]+$", max_length=255)
+    name: str = Field(max_length=200)
+    repository: str | None = Field(default=None, max_length=300)
+    category: str | None = Field(default=None, max_length=50)
+    installed_version: str | None = Field(default=None, max_length=200)
+    latest_version: str | None = Field(default=None, max_length=200)
+    release_url: str | None = Field(default=None, max_length=1000)
+    available: bool = False
+    update_available: bool = False
+    can_install: bool = False
+    in_progress: bool = False
+    restart_required: bool | None = None
+
+
 class InventoryPayload(_ProtocolModel):
     versions: InstalledVersions = Field(default_factory=InstalledVersions)
     collection: dict[str, CollectionHealth] = Field(default_factory=dict)
     addons: list[AddonInfo] = Field(default_factory=list)
     integrations: list[str] = Field(default_factory=list)
     hacs: list[str] = Field(default_factory=list)
+    hacs_repositories: list[HacsRepository] | None = Field(default=None, max_length=1000)
     automation_count: int = Field(default=0, ge=0)
     update_available: UpdateAvailability = Field(default_factory=UpdateAvailability)
+    health: FleetHealthPayload = Field(default_factory=FleetHealthPayload)
 
 
 class EventPayload(_ProtocolModel):
@@ -221,10 +272,28 @@ class ConsentStatePayload(_ProtocolModel):
     expires_at: datetime | None = None
 
 
+class CommandProgressPayload(_ProtocolModel):
+    command_id: uuid.UUID
+    entity_id: str = Field(pattern=r"^update\.[a-z0-9_]+$", max_length=255)
+    phase: Literal[
+        "backing_up",
+        "installing",
+        "verifying",
+        "restarting",
+        "restart_required",
+        "downloaded",
+        "verified",
+    ]
+    target_version: str = Field(min_length=1, max_length=200)
+    previous_version: str | None = Field(default=None, max_length=200)
+    backup_slug: str | None = Field(default=None, max_length=100)
+
+
 class CommandResultPayload(_ProtocolModel):
     command_id: uuid.UUID
     status: CommandResultStatus
     output: str | None = None
+    progress: CommandProgressPayload | None = None
 
 
 class TunnelDataPayload(_ProtocolModel):
@@ -319,6 +388,11 @@ class ConsentStateMessage(BaseMessage):
     payload: ConsentStatePayload
 
 
+class CommandProgressMessage(BaseMessage):
+    type: Literal[MessageType.COMMAND_PROGRESS] = MessageType.COMMAND_PROGRESS
+    payload: CommandProgressPayload
+
+
 class CommandResultMessage(BaseMessage):
     type: Literal[MessageType.COMMAND_RESULT] = MessageType.COMMAND_RESULT
     payload: CommandResultPayload
@@ -379,6 +453,7 @@ AgentToServerMessage = Annotated[
         InventoryMessage,
         EventMessage,
         ConsentStateMessage,
+        CommandProgressMessage,
         CommandResultMessage,
         TunnelDataMessage,
         TunnelClosedMessage,
@@ -407,6 +482,7 @@ AnyMessage = Annotated[
         InventoryMessage,
         EventMessage,
         ConsentStateMessage,
+        CommandProgressMessage,
         CommandResultMessage,
         TunnelDataMessage,
         TunnelClosedMessage,

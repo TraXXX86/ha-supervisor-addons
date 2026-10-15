@@ -17,12 +17,23 @@ Home Assistant à la plateforme de supervision, télémétrie, inventaire et mai
 La configuration et le fonctionnement du consentement sont décrits dans la
 [documentation de l'agent](hasup_agent/DOCS.md).
 
-## Mise à jour vers 0.3.1
+## Mise à jour vers 0.5.0
+
+Déployer d'abord le serveur et l'interface avec la migration **0010**, puis
+actualiser la boutique Home Assistant et installer **HA Supervisor Agent 0.5.0**.
+Cette version ajoute l'inventaire HACS détaillé, les mises à jour individuelles
+avec sauvegarde complète préalable, le suivi de progression et le redémarrage
+explicite avec vérification. Le consentement local reste obligatoire. Aucun
+module HACS n'est mis à jour automatiquement et aucun nouvel enrôlement n'est requis.
+
+## Mise à jour vers 0.4.0
 
 Pour **0.4.0**, déployer d'abord serveur/interface avec la migration **0007**.
 Cette version ajoute l'inventaire enrichi, l'historique observé et les règles de
 protection de l'onglet Sauvegardes. Aucune suppression/restauration n'est ajoutée.
 L'inventaire Supervisor ne garantit pas la visibilité sur tous les clouds.
+
+## Mise à jour vers 0.3.1
 
 Déployer d'abord le serveur et l'interface compatibles avec Stockage, avec les
 migrations 0005 et 0006, puis installer **HA Supervisor Agent 0.3.1**.

@@ -14,13 +14,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from hasup_protocol import CommandKind, CommandPayload, CommandResultPayload, CommandResultStatus
+from hasup_protocol import (
+    CommandKind,
+    CommandPayload,
+    CommandProgressPayload,
+    CommandResultPayload,
+    CommandResultStatus,
+)
 
 from .consent import ConsentManager
+from .hacs import HacsConsentExpired, HacsUpdater
 from .supervisor import SupervisorClient, SupervisorError, SupervisorTimeout
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,8 @@ DEFAULT_TIMEOUTS_S: dict[CommandKind, float] = {
     CommandKind.OS_UPDATE: 1800.0,
     CommandKind.ADDON_UPDATE: 1800.0,
     CommandKind.ADDON_RESTART: 300.0,
+    CommandKind.HACS_UPDATE: 3300.0,
+    CommandKind.HACS_RESTART: 600.0,
 }
 
 
@@ -59,8 +68,39 @@ class CommandExecutor:
         self._timeouts_s = {**DEFAULT_TIMEOUTS_S, **(timeouts_s or {})}
         self._clock = clock
         self._self_slug: str | None = None
+        self._maintenance_lock = asyncio.Lock()
+        self.hacs = HacsUpdater(client, consent)
 
-    async def execute(self, command: CommandPayload) -> CommandResultPayload:
+    async def execute(
+        self,
+        command: CommandPayload,
+        report: Callable[[CommandProgressPayload], Awaitable[None]] | None = None,
+    ) -> CommandResultPayload:
+        if self._maintenance_lock.locked():
+            return self._result(
+                command, CommandResultStatus.FAILED, "Une autre maintenance est en cours"
+            )
+        async with self._maintenance_lock:
+            return await self._execute(command, report)
+
+    async def _execute(
+        self,
+        command: CommandPayload,
+        report: Callable[[CommandProgressPayload], Awaitable[None]] | None,
+    ) -> CommandResultPayload:
+        progress: CommandProgressPayload | None = None
+
+        async def emit(value: CommandProgressPayload) -> None:
+            nonlocal progress
+            progress = value
+            if report is not None:
+                await report(value)
+
+        def finish(status: CommandResultStatus, output: str) -> CommandResultPayload:
+            result = self._result(command, status, output)
+            result.progress = progress
+            return result
+
         if command.expires_at <= self._clock():
             logger.warning("command %s received after expiry, not executed", command.command_id)
             return self._result(command, CommandResultStatus.TIMEOUT, "command expired")
@@ -84,20 +124,26 @@ class CommandExecutor:
         )
         try:
             async with asyncio.timeout(timeout_s):
-                output = await self._dispatch(command)
+                if command.kind in {CommandKind.HACS_UPDATE, CommandKind.HACS_RESTART}:
+                    output = await self.hacs.run(command, emit)
+                else:
+                    output = await self._dispatch(command)
         except (TimeoutError, SupervisorTimeout):
             logger.error("command %s timed out after %.0fs", command.command_id, timeout_s)
-            return self._result(
-                command, CommandResultStatus.TIMEOUT, f"timed out after {timeout_s:.0f}s"
+            return finish(
+                CommandResultStatus.TIMEOUT,
+                f"Délai dépassé ; résultat à vérifier sur la box (budget {timeout_s:.0f}s)",
             )
+        except HacsConsentExpired as exc:
+            return finish(CommandResultStatus.REFUSED_NO_CONSENT, str(exc))
         except SupervisorError as exc:
             logger.error("command %s failed: %s", command.command_id, exc)
-            return self._result(command, CommandResultStatus.FAILED, str(exc))
+            return finish(CommandResultStatus.FAILED, str(exc))
         except ValueError as exc:
             logger.error("command %s rejected: %s", command.command_id, exc)
-            return self._result(command, CommandResultStatus.FAILED, str(exc))
+            return finish(CommandResultStatus.FAILED, str(exc))
 
-        return self._result(command, CommandResultStatus.SUCCESS, output)
+        return finish(CommandResultStatus.SUCCESS, output)
 
     # ---------------------------------------------------------- dispatching
 
@@ -143,6 +189,7 @@ class CommandExecutor:
                     slug, timeout_s=self._timeouts_s[CommandKind.ADDON_RESTART]
                 )
                 return f"add-on {slug} restarted"
+        raise ValueError(f"Unsupported maintenance action: {command.kind}")
 
     async def _backup_create(self, params: dict[str, Any]) -> str:
         name = _optional_str(params, "name") or f"hasup-{self._clock():%Y%m%d-%H%M%S}"

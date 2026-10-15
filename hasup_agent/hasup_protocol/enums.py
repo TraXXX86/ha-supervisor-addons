@@ -15,6 +15,7 @@ class MessageType(StrEnum):
     EVENT = "event"
     CONSENT_STATE = "consent_state"
     COMMAND_RESULT = "command_result"
+    COMMAND_PROGRESS = "command_progress"
     TUNNEL_DATA = "tunnel_data"  # both directions
     TUNNEL_CLOSED = "tunnel_closed"
 
@@ -35,6 +36,8 @@ class CommandKind(StrEnum):
     OS_UPDATE = "os_update"
     ADDON_UPDATE = "addon_update"
     ADDON_RESTART = "addon_restart"
+    HACS_UPDATE = "hacs_update"
+    HACS_RESTART = "hacs_restart"
 
 
 class CommandResultStatus(StrEnum):

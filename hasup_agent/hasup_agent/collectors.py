@@ -12,11 +12,14 @@ from urllib.parse import urlsplit
 
 from hasup_protocol import (
     AddonInfo,
+    ComponentHealth,
     DiskUsageItem,
     DiskUsagePayload,
     HelloPayload,
     InstalledVersions,
+    IntegrationHealth,
     InventoryPayload,
+    RepairIssue,
     TelemetryPayload,
     UpdateAvailability,
 )
@@ -29,6 +32,8 @@ from hasup_protocol.messages import (
 )
 
 from . import AGENT_VERSION
+from .hacs import HACS_CAPABILITY
+from .hacs import repositories as hacs_inventory
 from .metrics import HostMetricsReader
 from .supervisor import SupervisorClient, SupervisorError
 
@@ -55,7 +60,7 @@ class Collectors:
         supervisor = await self._safe_dict(self._client.supervisor_info, "supervisor/info")
         return HelloPayload(
             agent_version=AGENT_VERSION,
-            capabilities=["tunnel_v2", "disk_usage_v1"],
+            capabilities=["tunnel_v2", "disk_usage_v1", HACS_CAPABILITY],
             ha_core=_str_or_none(core.get("version")),
             ha_os=_str_or_none(os_info.get("version")),
             ha_supervisor=_str_or_none(supervisor.get("version")),
@@ -354,6 +359,12 @@ class Collectors:
                     else []
                 )
                 current.hacs = _hacs_repositories(current.integrations, states, registry)
+                try:
+                    devices = await self._client.ha_device_registry() if registry else []
+                except SupervisorError:
+                    devices = []
+                current.hacs_repositories = hacs_inventory(states, registry, devices)
+                current.collection["hacs_inventory"] = self._health("hacs_inventory", True)
                 # Unavailable HACS update entities must not mean 'no updates'.
                 ids = {
                     entry.get("entity_id")
@@ -366,6 +377,9 @@ class Collectors:
             except SupervisorError as exc:
                 logger.warning("HACS attribution unavailable: %s", exc)
                 hacs_valid = False
+                current.collection["hacs_inventory"] = self._health("hacs_inventory", False)
+        else:
+            current.collection["hacs_inventory"] = self._health("hacs_inventory", False)
         current.collection["hacs"] = self._health("hacs", hacs_valid)
         flags = current.update_available.model_dump()
         versions: dict[str, str | None] = {}
@@ -388,6 +402,26 @@ class Collectors:
             current.collection[key] = self._health(key, valid)
         current.update_available = UpdateAvailability(**flags)
         current.versions = InstalledVersions(**versions)
+        current.health.addons = current.addons
+        current.health.core = ComponentHealth(
+            status="ok" if versions["core"] is not None else "unavailable",
+            version=versions["core"],
+        )
+        current.health.supervisor = ComponentHealth(
+            status="ok" if versions["supervisor"] is not None else "unavailable",
+            version=versions["supervisor"],
+        )
+        entries, current.health.collection["integrations"] = await self._collect(
+            "integration_health", self._integration_health, current.health.integrations
+        )
+        current.health.integrations = entries
+        repairs, current.health.collection["repairs"] = await self._collect(
+            "repairs", self._repairs, current.health.repairs
+        )
+        current.health.repairs = repairs
+        current.health.collection["core"] = current.collection["core"]
+        current.health.collection["supervisor"] = current.collection["supervisor"]
+        current.health.collection["addons"] = current.collection["addons"]
         self._inventory = current
         return current.model_copy(deep=True)
 
@@ -417,6 +451,7 @@ class Collectors:
                     or _str_or_none(item.get("version_installed"))
                     or "",
                     update_available=flag if isinstance(flag, bool) else None,
+                    state=_bounded_text(item.get("state"), 50),
                 )
             )
         return sorted(addons, key=lambda addon: addon.slug)
@@ -429,6 +464,44 @@ class Collectors:
 
     async def _states(self) -> list[dict[str, Any]]:
         return await self._client.ha_states()
+
+    async def _integration_health(self) -> list[IntegrationHealth]:
+        result = []
+        for item in await self._client.ha_config_entries():
+            domain = _bounded_text(item.get("domain"), 100)
+            title = _bounded_text(item.get("title"), 200)
+            state = _bounded_text(item.get("state"), 50)
+            if not domain or not title or not state:
+                continue
+            result.append(
+                IntegrationHealth(
+                    domain=domain,
+                    title=title,
+                    state=state,
+                    reason=_bounded_text(item.get("reason") or item.get("disabled_by"), 200),
+                )
+            )
+        return sorted(result, key=lambda entry: (entry.domain, entry.title))
+
+    async def _repairs(self) -> list[RepairIssue]:
+        result = []
+        for item in await self._client.ha_repairs():
+            issue_id = _bounded_text(item.get("issue_id"), 200)
+            domain = _bounded_text(item.get("domain"), 100)
+            if not issue_id or not domain:
+                continue
+            result.append(
+                RepairIssue(
+                    issue_id=issue_id,
+                    domain=domain,
+                    severity=_bounded_text(item.get("severity"), 30) or "warning",
+                    translation_key=_bounded_text(item.get("translation_key"), 200),
+                    breaks_in_ha_version=_bounded_text(item.get("breaks_in_ha_version"), 50),
+                    fixable=bool(item.get("is_fixable", item.get("fixable", False))),
+                    ignored=bool(item.get("is_ignored", item.get("ignored", False))),
+                )
+            )
+        return sorted(result, key=lambda issue: (issue.severity, issue.domain, issue.issue_id))
 
     async def _safe_dict(self, call: Any, label: str) -> dict[str, Any]:
         try:
